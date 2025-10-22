@@ -92,13 +92,10 @@ app.get("/campaigns_last", async (req, res) => {
     const { company } = req.query; // opcional
     const params = [];
     let sql = `
-      SELECT id, company_name, titulo, canal, data_veiculacao, valor_investido, retorno
+      SELECT id, company_name, titulo, data_veiculacao, valor_investido, retorno
       FROM campaigns
     `;
-    if (company) {
-      sql += " WHERE company_name = $1";
-      params.push(company);
-    }
+    if (company) { sql += " WHERE company_name = $1"; params.push(company); }
     sql += " ORDER BY data_veiculacao DESC NULLS LAST, id DESC LIMIT 1";
     const r = await pool.query(sql, params);
     res.json({ item: r.rows[0] || null });
@@ -107,6 +104,7 @@ app.get("/campaigns_last", async (req, res) => {
     res.status(500).json({ error: "server_error" });
   }
 });
+
 
 // start
 app.listen(port, () => {
