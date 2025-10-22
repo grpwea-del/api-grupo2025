@@ -123,6 +123,23 @@ app.get("/campaigns_last", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// GET /companies
+// -> lista todas as empresas (id, nome, área, descrição)
+// ---------------------------------------------------------------------
+app.get("/companies", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, nome, area, descricao FROM companies ORDER BY id"
+    );
+    res.json(result.rows);
+  } catch (e) {
+    console.error("Erro /companies:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+
+// ---------------------------------------------------------------------
 // Inicialização do servidor
 // ---------------------------------------------------------------------
 app.listen(port, () => {
