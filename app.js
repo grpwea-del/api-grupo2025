@@ -6,7 +6,7 @@ const { Pool } = pkg;
 const app = express();
 const port = process.env.PORT || 10000;
 
-// middlewares básicos
+// Middleware básico
 app.use(express.json());
 
 // Conexão com o banco (Render Postgres)
@@ -15,13 +15,16 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+// ---------------------------------------------------------------------
 // Rota principal (healthcheck)
+// ---------------------------------------------------------------------
 app.get("/", (req, res) => {
   res.send("✅ API do Grupo 2025 está online!");
 });
 
 // ---------------------------------------------------------------------
 // GET /get_balance?empresa=Grupo%20WE&ano=2024
+// Retorna os dados financeiros de uma empresa em um determinado ano
 // ---------------------------------------------------------------------
 app.get("/get_balance", async (req, res) => {
   const { empresa, ano } = req.query;
@@ -63,15 +66,19 @@ app.get("/get_balance", async (req, res) => {
 // ---------------------------------------------------------------------
 // GET /campaigns_count
 // GET /campaigns_count?company=Grupo%20WE
-// -> { total: number }
+// Retorna o número total de campanhas, opcionalmente filtrando por empresa
 // ---------------------------------------------------------------------
 app.get("/campaigns_count", async (req, res) => {
   try {
-    const { company } = req.query; // opcional
+    const { company } = req.query;
     const params = [];
-    let sql = "SELECT COUNT(*)::int AS total FROM campaigns";
+    let sql = `
+      SELECT COUNT(*)::int AS total
+      FROM campaigns c
+      JOIN companies co ON co.id = c.company_id
+    `;
     if (company) {
-      sql += " WHERE company_name = $1";
+      sql += " WHERE co.nome = $1";
       params.push(company);
     }
     const r = await pool.query(sql, params);
@@ -85,18 +92,28 @@ app.get("/campaigns_count", async (req, res) => {
 // ---------------------------------------------------------------------
 // GET /campaigns_last
 // GET /campaigns_last?company=Grupo%20WE
-// -> { item: { id, company_name, titulo, canal, data_veiculacao, valor_investido, retorno } | null }
+// Retorna a última campanha (mais recente) de uma empresa ou geral
 // ---------------------------------------------------------------------
 app.get("/campaigns_last", async (req, res) => {
   try {
-    const { company } = req.query; // opcional
+    const { company } = req.query;
     const params = [];
     let sql = `
-      SELECT id, company_name, titulo, data_veiculacao, valor_investido, retorno
-      FROM campaigns
+      SELECT 
+        c.id,
+        co.nome AS company_name,
+        c.titulo,
+        c.data_veiculacao,
+        c.valor_investido,
+        c.retorno
+      FROM campaigns c
+      JOIN companies co ON co.id = c.company_id
     `;
-    if (company) { sql += " WHERE company_name = $1"; params.push(company); }
-    sql += " ORDER BY data_veiculacao DESC NULLS LAST, id DESC LIMIT 1";
+    if (company) {
+      sql += " WHERE co.nome = $1";
+      params.push(company);
+    }
+    sql += " ORDER BY c.data_veiculacao DESC NULLS LAST, c.id DESC LIMIT 1";
     const r = await pool.query(sql, params);
     res.json({ item: r.rows[0] || null });
   } catch (e) {
@@ -105,8 +122,9 @@ app.get("/campaigns_last", async (req, res) => {
   }
 });
 
-
-// start
+// ---------------------------------------------------------------------
+// Inicialização do servidor
+// ---------------------------------------------------------------------
 app.listen(port, () => {
   console.log(`🚀 Servidor rodando na porta ${port}`);
 });
