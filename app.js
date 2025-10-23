@@ -208,6 +208,50 @@ app.get("/init_all", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// GET /leases_monthly
+// /leases_monthly
+// /leases_monthly?year=2024
+// /leases_monthly?year=2024&company=Agência WE
+// Retorna os registros mensais (empresa, ano, mês, valor, máquinas)
+// ---------------------------------------------------------------------
+app.get("/leases_monthly", async (req, res) => {
+  try {
+    const { year, company } = req.query;
+
+    const params = [];
+    let where = [];
+    let sql = `
+      SELECT 
+        co.nome AS company_name,
+        l.year,
+        l.month,
+        l.amount_paid::text AS amount_paid,  -- devolve como texto (pg numeric)
+        l.machines_count
+      FROM public.leases_monthly_machines l
+      JOIN public.companies co ON co.id = l.company_id
+    `;
+
+    if (year) {
+      params.push(parseInt(year, 10));
+      where.push(`l.year = $${params.length}`);
+    }
+    if (company) {
+      params.push(company);
+      where.push(`co.nome = $${params.length}`);
+    }
+    if (where.length) sql += " WHERE " + where.join(" AND ");
+
+    sql += " ORDER BY co.nome, l.year, l.month";
+
+    const r = await pool.query(sql, params);
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /leases_monthly:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
 
 // ---------------------------------------------------------------------
 // Inicialização do servidor
