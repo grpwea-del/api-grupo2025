@@ -252,6 +252,129 @@ app.get("/leases_monthly", async (req, res) => {
   }
 });
 
+// GET /clients/revenue?company=Agência%20WE
+// GET /clients/revenue?company=Agência%20WE&year=2024
+app.get("/clients/revenue", async (req, res) => {
+  try {
+    const { company, year } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const params = [company];
+    let sql;
+    if (year) {
+      params.push(parseInt(year, 10));
+      sql = `
+        SELECT SUM(p.realized)::numeric AS faturamento
+        FROM clients_performance p
+        JOIN companies c ON c.id = p.company_id
+        WHERE c.nome = $1 AND p.year = $2
+      `;
+    } else {
+      sql = `
+        SELECT p.year, SUM(p.realized)::numeric AS faturamento
+        FROM clients_performance p
+        JOIN companies c ON c.id = p.company_id
+        WHERE c.nome = $1
+        GROUP BY p.year
+        ORDER BY p.year
+      `;
+    }
+    const r = await pool.query(sql, params);
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /clients/revenue:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// GET /clients/top_commission_rate?company=Agência%20WE
+app.get("/clients/top_commission_rate", async (req, res) => {
+  try {
+    const { company } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const sql = `
+      SELECT p.client_name, AVG(p.commission_rate)::numeric AS maior_taxa
+      FROM clients_performance p
+      JOIN companies c ON c.id = p.company_id
+      WHERE c.nome = $1
+      GROUP BY p.client_name
+      ORDER BY maior_taxa DESC NULLS LAST
+      LIMIT 1
+    `;
+    const r = await pool.query(sql, [company]);
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /clients/top_commission_rate:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// GET /clients/most_above_planned?company=Agência%20WE
+// (opcional) &year=2024
+app.get("/clients/most_above_planned", async (req, res) => {
+  try {
+    const { company, year } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const params = [company];
+    let whereYear = "";
+    if (year) {
+      whereYear = "AND p.year = $2";
+      params.push(parseInt(year, 10));
+    }
+
+    const sql = `
+      SELECT p.client_name,
+             SUM(p.realized - p.planned)::numeric AS acima_previsto
+      FROM clients_performance p
+      JOIN companies c ON c.id = p.company_id
+      WHERE c.nome = $1 ${whereYear}
+      GROUP BY p.client_name
+      ORDER BY acima_previsto DESC NULLS LAST
+      LIMIT 1
+    `;
+    const r = await pool.query(sql, params);
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /clients/most_above_planned:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// GET /clients/top_commission_value?company=Agência%20WE
+// (opcional) &year=2024
+app.get("/clients/top_commission_value", async (req, res) => {
+  try {
+    const { company, year } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const params = [company];
+    let whereYear = "";
+    if (year) {
+      whereYear = "AND p.year = $2";
+      params.push(parseInt(year, 10));
+    }
+
+    const sql = `
+      SELECT p.client_name,
+             SUM(p.commission_value)::numeric AS valor_comissao
+      FROM clients_performance p
+      JOIN companies c ON c.id = p.company_id
+      WHERE c.nome = $1 ${whereYear}
+      GROUP BY p.client_name
+      ORDER BY valor_comissao DESC NULLS LAST
+      LIMIT 1
+    `;
+    const r = await pool.query(sql, params);
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /clients/top_commission_value:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+
 
 // ---------------------------------------------------------------------
 // Inicialização do servidor
