@@ -138,6 +138,44 @@ app.get("/companies", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// GET /leases_max?year=2024
+// GET /leases_max?year=2024&company=Agência%20WE
+// Retorna o mês de MAIOR valor pago (geral ou por empresa) e as máquinas
+// ---------------------------------------------------------------------
+app.get("/leases_max", async (req, res) => {
+  try {
+    const { year, company } = req.query;
+    if (!year) {
+      return res.status(400).json({ erro: "Informe ?year=2024 (e opcionalmente &company=Nome)" });
+    }
+
+    const params = [parseInt(year, 10)];
+    let sql = `
+      WITH ranked AS (
+        SELECT
+          l.year, l.month, l.amount_paid, l.machines_count,
+          ROW_NUMBER() OVER (PARTITION BY l.year ORDER BY l.amount_paid DESC) AS rn
+        FROM leases_monthly_machines l
+        ${company ? "JOIN companies c ON c.id = l.company_id" : ""}
+        WHERE l.year = $1
+        ${company ? "AND c.nome = $2" : ""}
+      )
+      SELECT year, month, amount_paid, machines_count
+      FROM ranked
+      WHERE rn = 1
+    `;
+    if (company) params.push(company);
+
+    const r = await pool.query(sql, params);
+    return res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /leases_max:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+
 
 // ---------------------------------------------------------------------
 // Inicialização do servidor
