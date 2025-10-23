@@ -175,6 +175,38 @@ app.get("/leases_max", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// GET /init_all
+// -> carrega dados iniciais de todas as tabelas relevantes
+// ---------------------------------------------------------------------
+app.get("/init_all", async (req, res) => {
+  try {
+    const [companies, leasesMax2024, leasesMax2025] = await Promise.all([
+      pool.query("SELECT id, nome, area, descricao FROM companies ORDER BY id"),
+      pool.query(`
+        SELECT c.nome AS company, l.year, l.month, l.amount_paid, l.machines_count
+        FROM leases_monthly_machines l
+        JOIN companies c ON c.id = l.company_id
+        WHERE l.year = 2024
+      `),
+      pool.query(`
+        SELECT c.nome AS company, l.year, l.month, l.amount_paid, l.machines_count
+        FROM leases_monthly_machines l
+        JOIN companies c ON c.id = l.company_id
+        WHERE l.year = 2025
+      `)
+    ]);
+
+    res.json({
+      companies: companies.rows,
+      leases_2024: leasesMax2024.rows,
+      leases_2025: leasesMax2025.rows
+    });
+  } catch (e) {
+    console.error("Erro /init_all:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
 
 
 // ---------------------------------------------------------------------
