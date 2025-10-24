@@ -8,6 +8,12 @@ const port = process.env.PORT || 10000;
 
 app.use(express.json());
 
+// 🔧 Cabeçalho padrão: força JSON UTF-8 em todas as respostas
+app.use((req, res, next) => {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  next();
+});
+
 // Conexão com o banco (Render Postgres)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -25,7 +31,6 @@ app.get("/", (req, res) => {
 // GET /get_balance?empresa=Agência%20WE&ano=2024
 // ---------------------------------------------------------------------
 app.get("/get_balance", async (req, res) => {
-  // 🔧 Suporte a "empresa" ou "company"
   const empresa = req.query.empresa || req.query.company;
   const { ano } = req.query;
 
@@ -35,14 +40,15 @@ app.get("/get_balance", async (req, res) => {
 
   try {
     const query = `
-      SELECT company_name, year, receita::text AS receita,
-             ebitda::text AS ebitda, lucro_liquido::text AS lucro_liquido
+      SELECT company_name, year,
+             receita::text AS receita,
+             ebitda::text AS ebitda,
+             lucro_liquido::text AS lucro_liquido
       FROM balances
       WHERE company_name = $1 AND year = $2
     `;
     const result = await pool.query(query, [empresa, parseInt(ano, 10)]);
 
-    // 🔧 Não inventar dado — se não encontrar, retorna 404
     if (result.rows.length === 0) {
       return res.status(404).json({ erro: "not_found" });
     }
@@ -126,7 +132,6 @@ app.get("/companies", async (req, res) => {
 
 // ---------------------------------------------------------------------
 // GET /leases_max?year=2024[&company=Agência%20WE]
-// 🔧 amount_paid agora padronizado como texto (string)
 // ---------------------------------------------------------------------
 app.get("/leases_max", async (req, res) => {
   try {
@@ -193,10 +198,240 @@ app.get("/init_all", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// RESTANTE DOS ENDPOINTS (leases_monthly, clients, etc.)
-// ... sem mudanças (mantêm formato atual)
+// GET /leases_monthly[?year=2024][&company=Agência%20WE]
 // ---------------------------------------------------------------------
+app.get("/leases_monthly", async (req, res) => {
+  try {
+    const { year, company } = req.query;
+    const params = [];
+    let where = [];
+    let sql = `
+      SELECT 
+        co.nome AS company_name,
+        l.year,
+        l.month,
+        l.amount_paid::text AS amount_paid,
+        l.machines_count
+      FROM public.leases_monthly_machines l
+      JOIN public.companies co ON co.id = l.company_id
+    `;
+    if (year) {
+      params.push(parseInt(year, 10));
+      where.push(`l.year = $${params.length}`);
+    }
+    if (company) {
+      params.push(company);
+      where.push(`co.nome = $${params.length}`);
+    }
+    if (where.length) sql += " WHERE " + where.join(" AND ");
+    sql += " ORDER BY co.nome, l.year, l.month";
 
+    const r = await pool.query(sql, params);
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /leases_monthly:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /clients/revenue?company=Agência%20WE[&year=2024]
+// ---------------------------------------------------------------------
+app.get("/clients/revenue", async (req, res) => {
+  try {
+    const { company, year } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const params = [company];
+    let sql;
+    if (year) {
+      params.push(parseInt(year, 10));
+      sql = `
+        SELECT SUM(p.realized)::text AS faturamento
+        FROM clients_performance p
+        JOIN companies c ON c.id = p.company_id
+        WHERE c.nome = $1 AND p.year = $2
+      `;
+    } else {
+      sql = `
+        SELECT p.year, SUM(p.realized)::text AS faturamento
+        FROM clients_performance p
+        JOIN companies c ON c.id = p.company_id
+        WHERE c.nome = $1
+        GROUP BY p.year
+        ORDER BY p.year
+      `;
+    }
+    const r = await pool.query(sql, params);
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /clients/revenue:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /clients/top_commission_rate?company=Agência%20WE
+// ---------------------------------------------------------------------
+app.get("/clients/top_commission_rate", async (req, res) => {
+  try {
+    const { company } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const sql = `
+      SELECT p.client_name, AVG(p.commission_rate)::text AS maior_taxa
+      FROM clients_performance p
+      JOIN companies c ON c.id = p.company_id
+      WHERE c.nome = $1
+      GROUP BY p.client_name
+      ORDER BY maior_taxa DESC NULLS LAST
+      LIMIT 1
+    `;
+    const r = await pool.query(sql, [company]);
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /clients/top_commission_rate:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /clients/most_above_planned?company=Agência%20WE[&year=2024]
+// ---------------------------------------------------------------------
+app.get("/clients/most_above_planned", async (req, res) => {
+  try {
+    const { company, year } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const params = [company];
+    let whereYear = "";
+    if (year) {
+      whereYear = "AND p.year = $2";
+      params.push(parseInt(year, 10));
+    }
+
+    const sql = `
+      SELECT p.client_name,
+             SUM(p.realized - p.planned)::text AS acima_previsto
+      FROM clients_performance p
+      JOIN companies c ON c.id = p.company_id
+      WHERE c.nome = $1 ${whereYear}
+      GROUP BY p.client_name
+      ORDER BY acima_previsto DESC NULLS LAST
+      LIMIT 1
+    `;
+    const r = await pool.query(sql, params);
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /clients/most_above_planned:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /clients/top_commission_value?company=Agência%20WE[&year=2024]
+// ---------------------------------------------------------------------
+app.get("/clients/top_commission_value", async (req, res) => {
+  try {
+    const { company, year } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const params = [company];
+    let whereYear = "";
+    if (year) {
+      whereYear = "AND p.year = $2";
+      params.push(parseInt(year, 10));
+    }
+
+    const sql = `
+      SELECT p.client_name,
+             SUM(p.commission_value)::text AS valor_comissao
+      FROM clients_performance p
+      JOIN companies c ON c.id = p.company_id
+      WHERE c.nome = $1 ${whereYear}
+      GROUP BY p.client_name
+      ORDER BY valor_comissao DESC NULLS LAST
+      LIMIT 1
+    `;
+    const r = await pool.query(sql, params);
+    res.json(r.rows[0] || null);
+  } catch (e) {
+    console.error("Erro /clients/top_commission_value:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /pr_materials_last[?company=Agência%20WE]
+// ---------------------------------------------------------------------
+app.get("/pr_materials_last", async (req, res) => {
+  try {
+    const { company } = req.query;
+    const params = [];
+    let sql = `
+      SELECT 
+        p.id,
+        c.nome AS company_name,
+        p.titulo,
+        p.data_publicacao,
+        p.valor_gerado::text AS valor_gerado,
+        p.conteudo
+      FROM pr_materials p
+      JOIN companies c ON c.id = p.company_id
+    `;
+    if (company) {
+      sql += " WHERE c.nome = $1";
+      params.push(company);
+    }
+    sql += " ORDER BY p.data_publicacao DESC NULLS LAST, p.created_at DESC LIMIT 1";
+    const r = await pool.query(sql, params);
+    res.json({ item: r.rows[0] || null });
+  } catch (e) {
+    console.error("Erro /pr_materials_last:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /employees_summary[?company=Agência%20WE]
+// ---------------------------------------------------------------------
+app.get("/employees_summary", async (req, res) => {
+  try {
+    const { company } = req.query;
+    if (!company) {
+      return res.status(400).json({ erro: "Informe ?company=Nome" });
+    }
+
+    const sql = `
+      SELECT e.nome, e.cargo, e.salario::text AS salario
+      FROM employees e
+      JOIN companies c ON c.id = e.company_id
+      WHERE c.nome = $1
+      ORDER BY e.nome
+    `;
+    const r = await pool.query(sql, [company]);
+
+    res.json({
+      company,
+      total_funcionarios: r.rowCount,
+      funcionarios: r.rows
+    });
+  } catch (e) {
+    console.error("Erro /employees_summary:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// 404 Fallback
+// ---------------------------------------------------------------------
+app.use((req, res) => {
+  res.status(404).json({ erro: "endpoint_not_found" });
+});
+
+// ---------------------------------------------------------------------
+// Inicialização do servidor
+// ---------------------------------------------------------------------
 app.listen(port, () => {
   console.log(`🚀 Servidor rodando na porta ${port}`);
 });
