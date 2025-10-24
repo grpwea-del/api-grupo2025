@@ -256,6 +256,117 @@ app.get("/leases_monthly", async (req, res) => {
   }
 });
 
+// ========================== CLIENTES (NOVOS) ==========================
+
+// ---------------------------------------------------------------------
+// GET /clients/names?company=Agência%20WE
+// -> Lista apenas os nomes distintos de clientes da empresa
+// ---------------------------------------------------------------------
+app.get("/clients/names", async (req, res) => {
+  try {
+    const { company } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const sql = `
+      SELECT DISTINCT cp.client_name
+      FROM clients_performance cp
+      JOIN companies c ON c.id = cp.company_id
+      WHERE LOWER(c.nome) = LOWER($1)
+      ORDER BY cp.client_name
+    `;
+    const r = await pool.query(sql, [company]);
+    res.json(r.rows.map(x => x.client_name));
+  } catch (e) {
+    console.error("Erro /clients/names:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /clients/list?company=Agência%20WE
+// -> Lista clientes, faixa de anos e quantidade de linhas por cliente
+// ---------------------------------------------------------------------
+app.get("/clients/list", async (req, res) => {
+  try {
+    const { company } = req.query;
+    if (!company) return res.status(400).json({ erro: "Informe ?company=Nome" });
+
+    const sql = `
+      SELECT cp.client_name,
+             COUNT(*)::int AS linhas,
+             MIN(cp.year) AS min_year,
+             MAX(cp.year) AS max_year
+      FROM clients_performance cp
+      JOIN companies c ON c.id = cp.company_id
+      WHERE LOWER(c.nome) = LOWER($1)
+      GROUP BY cp.client_name
+      ORDER BY cp.client_name
+    `;
+    const r = await pool.query(sql, [company]);
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /clients/list:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /clients/detail?company=Agência%20WE&client=BYD[&year=2024]
+// -> Resumo por cliente (mês a mês OU agregado do ano se year presente)
+// ---------------------------------------------------------------------
+app.get("/clients/detail", async (req, res) => {
+  try {
+    const { company, client, year } = req.query;
+    if (!company || !client) {
+      return res.status(400).json({ erro: "Informe ?company=Nome&client=Nome" });
+    }
+
+    const params = [company, client];
+    let sql;
+
+    if (year) {
+      params.push(parseInt(year, 10));
+      // agregado do ano
+      sql = `
+        SELECT cp.year,
+               SUM(cp.planned)::text         AS planned_total,
+               SUM(cp.realized)::text        AS realized_total,
+               AVG(cp.commission_rate)::text AS commission_rate_avg,
+               SUM(cp.commission_value)::text AS commission_value_total
+        FROM clients_performance cp
+        JOIN companies c ON c.id = cp.company_id
+        WHERE LOWER(c.nome) = LOWER($1) AND cp.client_name = $2 AND cp.year = $3
+        GROUP BY cp.year
+        ORDER BY cp.year
+      `;
+    } else {
+      // série mensal (todos os anos)
+      sql = `
+        SELECT cp.year,
+               cp.month,
+               cp.month_name,
+               cp.planned::text          AS planned,
+               cp.realized::text         AS realized,
+               cp.commission_rate::text  AS commission_rate,
+               cp.commission_value::text AS commission_value
+        FROM clients_performance cp
+        JOIN companies c ON c.id = cp.company_id
+        WHERE LOWER(c.nome) = LOWER($1) AND cp.client_name = $2
+        ORDER BY cp.year, cp.month
+      `;
+    }
+
+    const r = await pool.query(sql, params);
+    if (r.rows.length === 0) return res.status(404).json({ erro: "not_found" });
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /clients/detail:", e);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
+// ======================== FIM CLIENTES (NOVOS) ========================
+
 // ---------------------------------------------------------------------
 // GET /clients/revenue?company=Agência%20WE[&year=2024]
 // ---------------------------------------------------------------------
@@ -415,7 +526,7 @@ app.get("/pr_materials_last", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// GET /employees_summary[?company=Agência%20WE]
+// GET /employees_summary?company=Agência%20WE
 // ---------------------------------------------------------------------
 app.get("/employees_summary", async (req, res) => {
   try {
