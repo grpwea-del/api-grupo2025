@@ -14,6 +14,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// 🔎 Log simples de requisições (útil na demo)
+app.use((req, _res, next) => {
+  console.log(`📡 ${req.method} ${req.url}`);
+  next();
+});
+
 // Conexão com o banco (Render Postgres)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -23,8 +29,28 @@ const pool = new Pool({
 // ---------------------------------------------------------------------
 // Healthcheck
 // ---------------------------------------------------------------------
-app.get("/", (req, res) => {
+app.get("/", (_req, res) => {
   res.send("✅ API do Grupo 2025 está online!");
+});
+
+// ---------------------------------------------------------------------
+// GET /balances  (lista completa, útil para testes rápidos)
+// ---------------------------------------------------------------------
+app.get("/balances", async (_req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT company_name, year,
+             receita::text AS receita,
+             ebitda::text AS ebitda,
+             lucro_liquido::text AS lucro_liquido
+      FROM balances
+      ORDER BY company_name, year
+    `);
+    res.json(r.rows);
+  } catch (e) {
+    console.error("Erro /balances:", e);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
 // ---------------------------------------------------------------------
@@ -45,14 +71,10 @@ app.get("/get_balance", async (req, res) => {
              ebitda::text AS ebitda,
              lucro_liquido::text AS lucro_liquido
       FROM balances
-      WHERE company_name = $1 AND year = $2
+      WHERE LOWER(company_name) = LOWER($1) AND year = $2
     `;
     const result = await pool.query(query, [empresa, parseInt(ano, 10)]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ erro: "not_found" });
-    }
-
+    if (result.rows.length === 0) return res.status(404).json({ erro: "not_found" });
     res.json(result.rows);
   } catch (err) {
     console.error("Erro ao consultar banco:", err);
@@ -73,7 +95,7 @@ app.get("/campaigns_count", async (req, res) => {
       JOIN companies co ON co.id = c.company_id
     `;
     if (company) {
-      sql += " WHERE co.nome = $1";
+      sql += " WHERE LOWER(co.nome) = LOWER($1)";
       params.push(company);
     }
     const r = await pool.query(sql, params);
@@ -103,7 +125,7 @@ app.get("/campaigns_last", async (req, res) => {
       JOIN companies co ON co.id = c.company_id
     `;
     if (company) {
-      sql += " WHERE co.nome = $1";
+      sql += " WHERE LOWER(co.nome) = LOWER($1)";
       params.push(company);
     }
     sql += " ORDER BY c.data_veiculacao DESC NULLS LAST, c.id DESC LIMIT 1";
@@ -118,7 +140,7 @@ app.get("/campaigns_last", async (req, res) => {
 // ---------------------------------------------------------------------
 // GET /companies
 // ---------------------------------------------------------------------
-app.get("/companies", async (req, res) => {
+app.get("/companies", async (_req, res) => {
   try {
     const result = await pool.query(
       "SELECT id, nome, area, descricao FROM companies ORDER BY id"
@@ -149,7 +171,7 @@ app.get("/leases_max", async (req, res) => {
         FROM leases_monthly_machines l
         ${company ? "JOIN companies c ON c.id = l.company_id" : ""}
         WHERE l.year = $1
-        ${company ? "AND c.nome = $2" : ""}
+        ${company ? "AND LOWER(c.nome) = LOWER($2)" : ""}
       )
       SELECT year, month, amount_paid, machines_count
       FROM ranked
@@ -168,7 +190,7 @@ app.get("/leases_max", async (req, res) => {
 // ---------------------------------------------------------------------
 // GET /init_all
 // ---------------------------------------------------------------------
-app.get("/init_all", async (req, res) => {
+app.get("/init_all", async (_req, res) => {
   try {
     const [companies, leasesMax2024, leasesMax2025] = await Promise.all([
       pool.query("SELECT id, nome, area, descricao FROM companies ORDER BY id"),
@@ -204,7 +226,7 @@ app.get("/leases_monthly", async (req, res) => {
   try {
     const { year, company } = req.query;
     const params = [];
-    let where = [];
+    const where = [];
     let sql = `
       SELECT 
         co.nome AS company_name,
@@ -221,7 +243,7 @@ app.get("/leases_monthly", async (req, res) => {
     }
     if (company) {
       params.push(company);
-      where.push(`co.nome = $${params.length}`);
+      where.push(`LOWER(co.nome) = LOWER($${params.length})`);
     }
     if (where.length) sql += " WHERE " + where.join(" AND ");
     sql += " ORDER BY co.nome, l.year, l.month";
@@ -250,14 +272,14 @@ app.get("/clients/revenue", async (req, res) => {
         SELECT SUM(p.realized)::text AS faturamento
         FROM clients_performance p
         JOIN companies c ON c.id = p.company_id
-        WHERE c.nome = $1 AND p.year = $2
+        WHERE LOWER(c.nome) = LOWER($1) AND p.year = $2
       `;
     } else {
       sql = `
         SELECT p.year, SUM(p.realized)::text AS faturamento
         FROM clients_performance p
         JOIN companies c ON c.id = p.company_id
-        WHERE c.nome = $1
+        WHERE LOWER(c.nome) = LOWER($1)
         GROUP BY p.year
         ORDER BY p.year
       `;
@@ -282,7 +304,7 @@ app.get("/clients/top_commission_rate", async (req, res) => {
       SELECT p.client_name, AVG(p.commission_rate)::text AS maior_taxa
       FROM clients_performance p
       JOIN companies c ON c.id = p.company_id
-      WHERE c.nome = $1
+      WHERE LOWER(c.nome) = LOWER($1)
       GROUP BY p.client_name
       ORDER BY maior_taxa DESC NULLS LAST
       LIMIT 1
@@ -315,7 +337,7 @@ app.get("/clients/most_above_planned", async (req, res) => {
              SUM(p.realized - p.planned)::text AS acima_previsto
       FROM clients_performance p
       JOIN companies c ON c.id = p.company_id
-      WHERE c.nome = $1 ${whereYear}
+      WHERE LOWER(c.nome) = LOWER($1) ${whereYear}
       GROUP BY p.client_name
       ORDER BY acima_previsto DESC NULLS LAST
       LIMIT 1
@@ -348,7 +370,7 @@ app.get("/clients/top_commission_value", async (req, res) => {
              SUM(p.commission_value)::text AS valor_comissao
       FROM clients_performance p
       JOIN companies c ON c.id = p.company_id
-      WHERE c.nome = $1 ${whereYear}
+      WHERE LOWER(c.nome) = LOWER($1) ${whereYear}
       GROUP BY p.client_name
       ORDER BY valor_comissao DESC NULLS LAST
       LIMIT 1
@@ -380,7 +402,7 @@ app.get("/pr_materials_last", async (req, res) => {
       JOIN companies c ON c.id = p.company_id
     `;
     if (company) {
-      sql += " WHERE c.nome = $1";
+      sql += " WHERE LOWER(c.nome) = LOWER($1)";
       params.push(company);
     }
     sql += " ORDER BY p.data_publicacao DESC NULLS LAST, p.created_at DESC LIMIT 1";
@@ -406,7 +428,7 @@ app.get("/employees_summary", async (req, res) => {
       SELECT e.nome, e.cargo, e.salario::text AS salario
       FROM employees e
       JOIN companies c ON c.id = e.company_id
-      WHERE c.nome = $1
+      WHERE LOWER(c.nome) = LOWER($1)
       ORDER BY e.nome
     `;
     const r = await pool.query(sql, [company]);
@@ -425,8 +447,8 @@ app.get("/employees_summary", async (req, res) => {
 // ---------------------------------------------------------------------
 // 404 Fallback
 // ---------------------------------------------------------------------
-app.use((req, res) => {
-  res.status(404).json({ erro: "endpoint_not_found" });
+app.use((_req, res) => {
+  res.status(404).json({ erro: "endpoint não encontrado" });
 });
 
 // ---------------------------------------------------------------------
